@@ -4,13 +4,14 @@ import mlflow.pyfunc
 import pandas as pd
 from keras import models as keras_models
 from keras.preprocessing.text import Tokenizer
+import keras.backend
+import tensorflow as tf
 from mlflow.pyfunc import PythonModelContext
 from sklearn.preprocessing import MultiLabelBinarizer
 
 from src import parser
 
 MAX_WORDS = 1_000
-
 
 def fit_tokenizer(streamer: parser.ReutersStreamer) -> Tokenizer:
     # Tokenize all reuters dataset
@@ -76,6 +77,8 @@ class ModelWrapper(mlflow.pyfunc.PythonModel):
     """
 
     def __init__(self, tokenizer: Tokenizer, topics_encoder: MultiLabelBinarizer):
+        self.graph = None
+        self.sess = None
         self.tokenizer = tokenizer  # tokenizer that memorized word index from text corpus used in training step
         self.topics_encoder = topics_encoder  # Multi label topics encoder
         self.keras_model = None
@@ -84,11 +87,21 @@ class ModelWrapper(mlflow.pyfunc.PythonModel):
         if 'keras_model' not in context.artifacts:
             raise RuntimeError('"keras_model" artifact is not found. It should be stored keras model as h5 file')
         model_path = context.artifacts['keras_model']
-        self.keras_model = keras_models.load_model(model_path)
+
+        graph = tf.Graph()
+        sess = tf.Session(graph=graph)
+        with graph.as_default():
+            with sess.as_default():  # pylint:disable=not-context-manager
+                keras.backend.set_learning_phase(0)
+                self.keras_model = keras_models.load_model(model_path)
+                self.sess = sess
+                self.graph = graph
 
     def predict(self, context, model_input: pd.DataFrame):
         X = self.tokenizer.texts_to_matrix(model_input['text'])
-        Y = pd.DataFrame(self.keras_model.predict(X))
+        with self.graph.as_default():
+            with self.sess.as_default():
+                Y = pd.DataFrame(self.keras_model.predict(X))
         Y.index = model_input.index
         Y.columns = self.topics_encoder.classes_
         Y = Y.applymap(float_to_percentage)
