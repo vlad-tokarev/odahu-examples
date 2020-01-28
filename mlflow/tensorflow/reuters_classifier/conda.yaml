@@ -1,0 +1,8 @@
+name: reuters-classifier
+channels:
+  - defaults
+dependencies:
+  - python=3.6
+  - keras=2.2.0
+  - pip:
+    - mlflow>=1.0
